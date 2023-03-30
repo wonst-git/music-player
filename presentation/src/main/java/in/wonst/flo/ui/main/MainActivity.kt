@@ -2,7 +2,6 @@ package `in`.wonst.flo.ui.main
 
 import android.annotation.SuppressLint
 import android.os.Bundle
-import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.compose.setContent
@@ -16,7 +15,7 @@ import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
-import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -87,15 +86,15 @@ class MainActivity : ComponentActivity() {
             }
         }
 
-
-
         initData()
         initListener()
         initObserve()
     }
 
     private fun initData() {
-        viewModel.getSong()
+        if (viewModel.songData.value == null) {
+            viewModel.getSong()
+        }
     }
 
     private fun initListener() {
@@ -110,18 +109,8 @@ class MainActivity : ComponentActivity() {
     private fun initObserve() {
         lifecycleScope.launch {
             launch {
-                viewModel.songData.collect {
-                    it?.let {
-                        viewModel.mediaPlayer.setDataSource(it.file)
-                        viewModel.mediaPlayer.prepareAsync()
-                    }
-                }
-            }
-            launch {
                 while (true) {
-                    if (viewModel.isPlaying.value) {
-                        viewModel.setCurrentPosition(viewModel.mediaPlayer.currentPosition)
-                    }
+                    if (viewModel.mediaPlayer.isPlaying) viewModel.setCurrentPosition(viewModel.mediaPlayer.currentPosition)
                     delay(500)
                 }
             }
@@ -139,14 +128,11 @@ fun MainView(viewModel: MainViewModel = viewModel()) {
         Surface(modifier = Modifier.weight(1f)) {
             MusicView()
 
-            AnimatedVisibility(
-                visible = viewModel.showLyrics.collectAsState().value,
-                enter = slideInVertically(initialOffsetY = {
-                    it
-                }) + expandVertically(expandFrom = Alignment.Top) + fadeIn(),
-                exit = slideOutVertically(targetOffsetY = {
-                    it
-                }) + shrinkVertically() + fadeOut()
+            AnimatedVisibility(visible = viewModel.showLyrics.collectAsState().value, enter = slideInVertically(initialOffsetY = {
+                it
+            }) + expandVertically(expandFrom = Alignment.Top) + fadeIn(), exit = slideOutVertically(targetOffsetY = {
+                it
+            }) + shrinkVertically() + fadeOut()
             ) {
                 LyricsView()
             }
@@ -176,8 +162,7 @@ fun MusicView(viewModel: MainViewModel = viewModel()) {
             AsyncImage(
                 model = musicState?.image, contentDescription = "", modifier = Modifier
                     .defaultMinSize(minHeight = 0.dp)
-                    .wrapContentHeight(),
-                contentScale = ContentScale.Fit
+                    .wrapContentHeight(), contentScale = ContentScale.Fit
             )
         }
 
@@ -212,12 +197,16 @@ fun MusicView(viewModel: MainViewModel = viewModel()) {
     }
 }
 
+@SuppressLint("CoroutineCreationDuringComposition")
 @Composable
 fun LyricsView(viewModel: MainViewModel = viewModel()) {
     val musicState by viewModel.songData.collectAsState()
     val lyricsPosition by viewModel.lyricsPosition.collectAsState()
     val currentPosition by viewModel.currentPosition.collectAsState()
     val parseLyrics by viewModel.parseLyrics.collectAsState()
+    val lyricsClickable by viewModel.lyricsClickable.collectAsState()
+    val scrollState = rememberLazyListState()
+    val coroutineScope = rememberCoroutineScope()
 
     Column(
         Modifier
@@ -237,37 +226,48 @@ fun LyricsView(viewModel: MainViewModel = viewModel()) {
                 .size(36.dp)
                 .align(Alignment.CenterEnd))
         }
-
-        parseLyrics.let {
-            LazyColumn(Modifier.fillMaxSize()) {
-                itemsIndexed(it) { index, item ->
-                    Text(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(vertical = 10.dp)
-                            .alpha(
-                                if (index == lyricsPosition) {
-                                    if (index == 0 && (parseLyrics.getOrNull(index)?.first ?: 0) > currentPosition) {
-                                        0.5f
+        Row(modifier = Modifier.padding(10.dp)) {
+            parseLyrics.let {
+                LazyColumn(Modifier.weight(1f), scrollState) {
+                    itemsIndexed(it) { index, item ->
+                        Text(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .padding(vertical = 10.dp)
+                                .alpha(
+                                    if (index == lyricsPosition) {
+                                        if (index == 0 && (parseLyrics.getOrNull(index)?.first ?: 0) > currentPosition) {
+                                            0.5f
+                                        } else {
+                                            1f
+                                        }
                                     } else {
-                                        1f
+                                        0.5f
                                     }
+                                )
+                                .clickable(enabled = lyricsClickable) {
+                                    viewModel.setMediaPlayerSeek(item.first.toInt())
+                                }, text = item.second, textAlign = TextAlign.Center, fontWeight = if (index == lyricsPosition) {
+                                if (index == 0 && (parseLyrics.getOrNull(index)?.first ?: 0) > currentPosition) {
+                                    FontWeight.Normal
                                 } else {
-                                    0.5f
+                                    FontWeight.Bold
                                 }
-                            ), text = item.second, textAlign = TextAlign.Center, fontWeight = if (index == lyricsPosition) {
-                            if (index == 0 && (parseLyrics.getOrNull(index)?.first ?: 0) > currentPosition) {
-                                FontWeight.Normal
                             } else {
-                                FontWeight.Bold
+                                FontWeight.Normal
                             }
-                        } else {
-                            FontWeight.Normal
-                        }
-                    )
+                        )
+                    }
                 }
             }
+            IconToggleButton(modifier = Modifier.size(36.dp), checked = lyricsClickable, onCheckedChange = { viewModel.setLyricsClickable(it) }) {
+                Icon(painter = painterResource(id = R.drawable.ic_click), contentDescription = "")
+            }
         }
+    }
+
+    coroutineScope.launch {
+        scrollState.scrollToItem(index = lyricsPosition)
     }
 }
 
@@ -284,9 +284,9 @@ fun ControlView(viewModel: MainViewModel = viewModel()) {
     val isPlaying by viewModel.isPlaying.collectAsState()
 
     Column(Modifier.wrapContentHeight()) {
-        Text(
-            text = SimpleDateFormat("mm:ss", Locale.getDefault()).format((position.value * 1000).toLong()),
-            textAlign = TextAlign.Center, fontSize = TextUnit(10f, TextUnitType.Unspecified),
+        Text(text = SimpleDateFormat("mm:ss", Locale.getDefault()).format((position.value * 1000).toLong()),
+            textAlign = TextAlign.Center,
+            fontSize = TextUnit(10f, TextUnitType.Unspecified),
             modifier = Modifier
                 .align(Alignment.Start)
                 .padding(start = with(LocalDensity.current) {
@@ -296,25 +296,20 @@ fun ControlView(viewModel: MainViewModel = viewModel()) {
                     textWidth.value = it.size.width.toFloat()
                 }
                 .alpha(if (sliderInteraction.collectIsDraggedAsState().value) 1f else 0f)
-                .background(Color.LightGray, RoundedCornerShape(4.dp))
-                .padding(8.dp)
-        )
+                .padding(8.dp))
 
-        Slider(
-            modifier = Modifier
-                .scale(
-                    1f, if (sliderInteraction.collectIsDraggedAsState().value) {
-                        3f
-                    } else {
-                        1f
-                    }
-                )
-                .onGloballyPositioned {
-                    Log.d("slider", "${it.size.height.dp}${it.size.width.dp}")
-                    thumbOffset.value = it.size.width.toFloat()
-                },
-            interactionSource = sliderInteraction,
-
+        Slider(modifier = Modifier
+            .scale(
+                1f, if (sliderInteraction.collectIsDraggedAsState().value) {
+                    3f
+                } else {
+                    1f
+                }
+            )
+            .height(8.dp)
+            .onGloballyPositioned {
+                thumbOffset.value = it.size.width.toFloat()
+            }, interactionSource = sliderInteraction,
             value = if (sliderInteraction.collectIsDraggedAsState().value) position.value else currentPosition.toFloat() / 1000, onValueChange = {
                 position.value = it
             }, onValueChangeFinished = {
@@ -326,8 +321,7 @@ fun ControlView(viewModel: MainViewModel = viewModel()) {
                         .shadow(0.dp)
                         .background(Color.Transparent)
                 )
-            }
-        )
+            })
 
         Box(modifier = Modifier.fillMaxWidth()) {
             Text(modifier = Modifier.align(Alignment.CenterStart), text = SimpleDateFormat("mm:ss", Locale.getDefault()).format(currentPosition), color = MaterialTheme.colorScheme.primary)
@@ -340,34 +334,20 @@ fun ControlView(viewModel: MainViewModel = viewModel()) {
                 .wrapContentHeight(),
             horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically,
         ) {
-            Icon(painter = painterResource(id = R.drawable.ic_previous), contentDescription = null, modifier = Modifier
-                .clickable {
-
-                }
-                .size(48.dp))
-
-            Spacer(modifier = Modifier.width(18.dp))
-
-            Icon(painter = painterResource(id = if (isPlaying) R.drawable.ic_pause else R.drawable.ic_play), contentDescription = null, modifier = Modifier
-                .clickable {
-                    if (isPlaying) {
-                        viewModel.setPlaying(false)
-                        viewModel.mediaPlayer.pause()
-                    } else {
-                        viewModel.setPlaying(true)
+            IconToggleButton(
+                checked = isPlaying,
+                onCheckedChange = {
+                    viewModel.setPlaying(it)
+                    if (it) {
                         viewModel.mediaPlayer.start()
+                    } else {
+                        viewModel.mediaPlayer.pause()
                     }
-                }
-                .size(60.dp)
-            )
-
-            Spacer(modifier = Modifier.width(18.dp))
-
-            Icon(painter = painterResource(id = R.drawable.ic_next), contentDescription = null, modifier = Modifier
-                .clickable {
-
-                }
-                .size(48.dp))
+                },
+                colors = IconButtonDefaults.iconToggleButtonColors(contentColor = MaterialTheme.colorScheme.onSurface, checkedContentColor = MaterialTheme.colorScheme.onSurface)
+            ) {
+                Icon(painter = painterResource(id = if (isPlaying) R.drawable.ic_pause else R.drawable.ic_play), contentDescription = "", modifier = Modifier.size(60.dp))
+            }
         }
     }
 }
